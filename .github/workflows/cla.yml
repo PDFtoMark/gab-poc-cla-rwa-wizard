@@ -1,0 +1,119 @@
+---
+name: CLA Assistant
+on:
+  issue_comment:
+    types:
+      - created
+  pull_request_target:
+    types:
+      - opened
+      - closed
+      - synchronize
+      - labeled
+permissions:
+  contents: read
+
+jobs:
+  CLAAssistant:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      statuses: write
+      checks: write
+      issues: write
+    steps:
+      # --- stubbed: original checks out private OpenZeppelin/cla-sigs with CLA_SIGS_ACCESS_PAT
+      - name: Read Allowlist File
+        id: read_allowlist
+        run: |
+          printf 'dependabot[bot],renovate[bot],openzeppelin-admin' > allowlist.txt
+          ALLOWLIST=$(cat allowlist.txt)
+          echo "allowlist=$ALLOWLIST" >> $GITHUB_OUTPUT
+      # --- verbatim from target lines 44-52, plus diagnostics
+      - name: Check if user is in allowlist
+        id: check_allowlist
+        run: |
+          PR_USER=${{ github.event.pull_request.user.login }}
+          echo "event=${{ github.event_name }} resolved PR_USER=[$PR_USER]"
+          echo "allowlist_out=[${{ steps.read_allowlist.outputs.allowlist }}]"
+          if [[ "${{ steps.read_allowlist.outputs.allowlist }}" == *"$PR_USER"* ]]; then
+            echo "is_allowed=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_allowed=false" >> $GITHUB_OUTPUT
+          fi
+          echo "--- control: same test against the real, non-allowlisted commenter login"
+          if [[ "${{ steps.read_allowlist.outputs.allowlist }}" == *"${{ github.event.comment.user.login }}"* ]]; then
+            echo "control_is_allowed=true"
+          else
+            echo "control_is_allowed=false"
+          fi
+      # --- stubbed: original runs contributor-assistant/github-action; simulates an
+      #     unsigned contributor so its outcome is failure (as in the real flow)
+      - name: CLA Assistant (stub, always fails = unsigned)
+        continue-on-error: true
+        id: cla_assistant
+        run: exit 1
+      # --- verbatim from target lines 72-109 (GITHUB_TOKEN permissions identical)
+      - name: Label PR as CLA Unsigned
+        if: ${{ steps.cla_assistant.outcome != 'success' && steps.check_allowlist.outputs.is_allowed == 'false' }}
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          elif [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            PR_NUMBER="${{ github.event.issue.number }}"
+          fi
+          ENDPOINT="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/labels"
+          curl -L -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -d '{"labels":["cla: unsigned"]}' \
+            $ENDPOINT
+          exit 1
+      - name: Label PR as CLA Signed
+        if: ${{ steps.cla_assistant.outcome == 'success' && steps.check_allowlist.outputs.is_allowed == 'false' }}
+        run: |-
+          if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          elif [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            PR_NUMBER="${{ github.event.issue.number }}"
+          fi
+          ENDPOINT="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/labels"
+          curl -L -X DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$ENDPOINT/cla:%20unsigned" || true
+          curl -L -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -d '{"labels":["cla: signed"]}' \
+            $ENDPOINT
+      - name: Label PR as CLA Allowlist
+        if: ${{ steps.check_allowlist.outputs.is_allowed == 'true' }}
+        run: |-
+          if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          elif [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            PR_NUMBER="${{ github.event.issue.number }}"
+          fi
+          ENDPOINT="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/labels"
+          curl -L -X DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$ENDPOINT/cla:%20unsigned" || true
+          curl -L -X DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$ENDPOINT/cla:%20signed" || true
+          curl -L -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -d '{"labels":["cla: allowlist"]}' \
+            $ENDPOINT
